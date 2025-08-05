@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SVG Stroke Plotter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.min.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 1rem;
+      margin: 0;
+      background: #fafafa;
+    }
+    h2 {
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    .container {
+      max-width: 800px;
+      margin: auto;
+    }
+    label {
+      font-weight: bold;
+      display: block;
+      margin-top: 1rem;
+    }
+    input, button {
+      font-size: 1rem;
+      padding: 0.5rem;
+      width: 100%;
+      margin-top: 0.2rem;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 1rem;
+      cursor: pointer;
+      background: black;
+      color: white;
+      border: none;
+    }
+    #svgContainer {
+      margin-top: 2rem;
+      width: 100%;
+      border: 1px dashed #ccc;
+      background: white;
+    }
+    @media (min-width: 600px) {
+      .row {
+        display: flex;
+        gap: 1rem;
+      }
+      .row > div {
+        flex: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>SVG Stroke Plotter</h2>
+
+    <label for="equationInput">Equation (in x):</label>
+    <input id="equationInput" placeholder="e.g., sin(x), x^2, exp(-x^2)" />
+
+    <div class="row">
+      <div>
+        <label for="xMin">x Min:</label>
+        <input id="xMin" type="number" value="-10" />
+      </div>
+      <div>
+        <label for="xMax">x Max:</label>
+        <input id="xMax" type="number" value="10" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="yMin">y Min (optional):</label>
+        <input id="yMin" type="number" placeholder="Auto" />
+      </div>
+      <div>
+        <label for="yMax">y Max (optional):</label>
+        <input id="yMax" type="number" placeholder="Auto" />
+      </div>
+    </div>
+
+    <label for="margin">Margin % (adds padding):</label>
+    <input id="margin" type="number" value="5" />
+
+    <label for="resolution">Samples per unit (higher = smoother):</label>
+    <input id="resolution" type="number" value="100" />
+
+    <label>
+      <input type="checkbox" id="showAxes" checked />
+      Show axes in browser (hidden in export)
+    </label>
+
+    <button onclick="draw()">Plot</button>
+    <button onclick="downloadSVG()">Download SVG (no axes)</button>
+
+    <div id="svgContainer"></div>
+  </div>
+
+  <script>
+    const WIDTH = 960;
+    const HEIGHT = 540;
+
+    function draw() {
+      const expr = document.getElementById("equationInput").value.trim();
+      let xMin = parseFloat(document.getElementById("xMin").value);
+      let xMax = parseFloat(document.getElementById("xMax").value);
+      const yMinRaw = document.getElementById("yMin").value;
+      const yMaxRaw = document.getElementById("yMax").value;
+      const marginPercent = parseFloat(document.getElementById("margin").value || 0);
+      const resolution = parseFloat(document.getElementById("resolution").value);
+      const showAxes = document.getElementById("showAxes").checked;
+
+      if (!expr || isNaN(xMin) || isNaN(xMax) || xMin >= xMax || resolution <= 0) {
+        return alert("Please enter valid function and ranges.");
+      }
+
+      let fn;
+      try {
+        fn = math.compile(expr);
+      } catch (e) {
+        return alert("Invalid function: " + e.message);
+      }
+
+      const step = 1 / resolution;
+      const xValues = d3.range(xMin, xMax + step, step);
+      const points = xValues.map(x => {
+        try {
+          const y = fn.evaluate({ x });
+          return [x, y];
+        } catch {
+          return [x, NaN];
+        }
+      }).filter(d => isFinite(d[1]));
+
+      if (points.length < 2) return alert("Function produced too few valid points.");
+
+      let [yMin, yMax] = d3.extent(points, d => d[1]);
+
+      if (yMinRaw !== "") yMin = parseFloat(yMinRaw);
+      if (yMaxRaw !== "") yMax = parseFloat(yMaxRaw);
+      if (!isFinite(yMin) || !isFinite(yMax) || yMin === yMax) {
+        return alert("Invalid y range.");
+      }
+
+      if (marginPercent > 0) {
+        const xPad = (xMax - xMin) * marginPercent / 100;
+        xMin -= xPad;
+        xMax += xPad;
+
+        if (yMinRaw === "" && yMaxRaw === "") {
+          const yPad = (yMax - yMin) * marginPercent / 100;
+          yMin -= yPad;
+          yMax += yPad;
+        }
+      }
+
+      d3.select("#svgContainer").html("");
+
+      const svg = d3.select("#svgContainer")
+        .append("svg")
+        .attr("xmlns", "http://www.w3.org/2000/svg")
+        .attr("viewBox", `0 0 ${WIDTH} ${HEIGHT}`)
+        .attr("width", "100%")
+        .attr("height", (WIDTH * 9 / 16) + "px") // Maintain 16:9 ratio
+        .style("background", "transparent");
+
+      const xScale = d3.scaleLinear().domain([xMin, xMax]).range([0, WIDTH]);
+      const yScale = d3.scaleLinear().domain([yMin, yMax]).range([HEIGHT, 0]);
+
+      // Optional axes
+      const axisGroup = svg.append("g").attr("id", "axes");
+      if (showAxes) {
+        if (xMin < 0 && xMax > 0) {
+          axisGroup.append("line")
+            .attr("x1", xScale(0)).attr("x2", xScale(0))
+            .attr("y1", 0).attr("y2", HEIGHT)
+            .attr("stroke", "#ccc").attr("stroke-width", 1);
+        }
+        if (yMin < 0 && yMax > 0) {
+          axisGroup.append("line")
+            .attr("x1", 0).attr("x2", WIDTH)
+            .attr("y1", yScale(0)).attr("y2", yScale(0))
+            .attr("stroke", "#ccc").attr("stroke-width", 1);
+        }
+      }
+
+      // Function stroke
+      const line = d3.line()
+        .x(d => xScale(d[0]))
+        .y(d => yScale(d[1]))
+        .defined(d => isFinite(d[1]))
+        .curve(d3.curveLinear);
+
+      svg.append("path")
+        .datum(points)
+        .attr("fill", "none")
+        .attr("stroke", "black")
+        .attr("stroke-width", 2)
+        .attr("d", line);
+    }
+
+    function downloadSVG() {
+      const original = document.querySelector("svg");
+      if (!original) return alert("Plot first!");
+
+      const clone = original.cloneNode(true);
+      const axes = clone.querySelector("#axes");
+      if (axes) axes.remove();
+
+      const serializer = new XMLSerializer();
+      const blob = new Blob([serializer.serializeToString(clone)], { type: "image/svg+xml" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "plot.svg";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    window.onload = () => {
+      document.getElementById("equationInput").value = "sin(x)";
+      draw();
+    };
+  </script>
+</body>
+</html>
